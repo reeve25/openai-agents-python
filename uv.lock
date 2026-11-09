@@ -2974,9 +2974,9 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12.2,<5" },
     { name = "urllib3", specifier = ">=2.8.0" },
     { name = "vercel-sandbox", marker = "extra == 'vercel'", specifier = ">=0.7.0,<0.9" },
-    { name = "websockets", specifier = ">=15.0,<17" },
-    { name = "websockets", marker = "extra == 'realtime'", specifier = ">=15.0,<17" },
-    { name = "websockets", marker = "extra == 'voice'", specifier = ">=15.0,<17" },
+    { name = "websockets", specifier = ">=15.0,<18" },
+    { name = "websockets", marker = "extra == 'realtime'", specifier = ">=15.0,<18" },
+    { name = "websockets", marker = "extra == 'voice'", specifier = ">=15.0,<18" },
 ]
 provides-extras = ["voice", "viz", "litellm", "any-llm", "realtime", "sqlalchemy", "encrypt", "redis", "dapr", "mongodb", "docker", "blaxel", "daytona", "cloudflare", "e2b", "modal", "vercel", "s3", "temporal"]
 
