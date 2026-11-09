@@ -10,6 +10,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from openai import APIConnectionError, AsyncOpenAI, BadRequestError
+from openai.types.responses.response_function_tool_call_item import (
+    ResponseFunctionToolCallItem,
+)
 from openai.types.responses.response_output_item import Program, ProgramOutput
 
 from agents import (
@@ -256,8 +259,9 @@ class TestOpenAIConversationsSessionBasicOperations:
             def __init__(self, item_id: int) -> None:
                 self.item_id = item_id
 
-            def model_dump(self, *, exclude_unset: bool) -> dict[str, int]:
+            def model_dump(self, *, exclude_unset: bool, by_alias: bool = False) -> dict[str, int]:
                 assert exclude_unset is True
+                assert by_alias is True
                 return {"item_id": self.item_id}
 
         yielded_item_ids: list[int] = []
@@ -279,6 +283,37 @@ class TestOpenAIConversationsSessionBasicOperations:
         assert yielded_item_ids == list(range(101, 0, -1))
         mock_openai_client.conversations.items.list.assert_called_once_with(
             conversation_id="test_id", order="desc"
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_items_and_pop_item_preserve_wire_aliases(self, mock_openai_client):
+        """Items read from the Conversations API must keep wire field names such as ``async``."""
+        # The API returns a function call made with the async flag as ``async``, which the
+        # OpenAI SDK models as the aliased attribute ``async_``.
+        expected: dict[str, Any] = {
+            "id": "fc_1",
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "lookup",
+            "arguments": "{}",
+            "status": "completed",
+            "async": True,
+        }
+        function_call = ResponseFunctionToolCallItem.model_validate(expected)
+
+        async def conversation_items(**kwargs: Any):
+            yield function_call
+
+        mock_openai_client.conversations.items.list = MagicMock(side_effect=conversation_items)
+        session = OpenAIConversationsSession(
+            conversation_id="test_id", openai_client=mock_openai_client
+        )
+
+        assert await session.get_items() == [expected]
+        assert await session.get_items(limit=1) == [expected]
+        assert await session.pop_item() == expected
+        mock_openai_client.conversations.items.delete.assert_awaited_once_with(
+            conversation_id="test_id", item_id="fc_1"
         )
 
     @pytest.mark.asyncio
