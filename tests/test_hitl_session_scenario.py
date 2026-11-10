@@ -153,7 +153,9 @@ async def test_openai_conversations_session_hitl_scenario() -> None:
             def __init__(self, payload: dict[str, Any]) -> None:
                 self._payload = payload
 
-            def model_dump(self, exclude_unset: bool = True) -> dict[str, Any]:
+            def model_dump(
+                self, exclude_unset: bool = True, by_alias: bool = False
+            ) -> dict[str, Any]:
                 return self._payload
 
         async def iterator():
