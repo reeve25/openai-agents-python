@@ -308,6 +308,14 @@ async def _session_add_items(
 
     add_with_generation = getattr(session, "_add_items_with_generation", None)
     if wrapper is not None and callable(add_with_generation):
+        get_with_generation = getattr(session, "_get_items_with_generation", None)
+        if not hasattr(wrapper, "_session_compaction_generation") and callable(get_with_generation):
+            # A RunState restored from JSON never read this Session, so its first append
+            # would revoke the compaction ownership a live RunState keeps from its earlier
+            # read. Take the current generation instead; a mutation that lands before the
+            # append still revokes ownership through the check in the Session.
+            _, generation = await _call_session_method(get_with_generation, _read_nothing)
+            wrapper._session_compaction_generation = generation  # type: ignore[attr-defined]
         expected_generation = getattr(wrapper, "_session_compaction_generation", None)
         generation = await _call_session_method(
             add_with_generation,
@@ -317,6 +325,11 @@ async def _session_add_items(
         wrapper._session_compaction_generation = generation  # type: ignore[attr-defined]
         return
     await write_items()
+
+
+async def _read_nothing() -> list[TResponseInputItem]:
+    """Stand in for a history read when only the Session generation is needed."""
+    return []
 
 
 async def _session_pop_item(

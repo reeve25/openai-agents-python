@@ -382,13 +382,10 @@ async def test_pending_approval_defers_automatic_compaction(
             state.reject(interrupted.interruptions[0])
         await run(agent, state, session, streamed)
 
-        for items in (model.calls[1].input, await session.get_items()):
-            assert [item["type"] for item in items if item.get("call_id") == call.call_id] == [
-                "function_call",
-                "function_call_output",
-            ]
-
-        await run(agent, "second", session, streamed)
+        assert [
+            item["type"] for item in model.calls[1].input if item.get("call_id") == call.call_id
+        ] == ["function_call", "function_call_output"]
+        # The deferred compaction settles with the resumed turn, as it does for a live RunState.
         client.responses.compact.assert_awaited_once()
         assert [
             item["type"]
@@ -397,11 +394,59 @@ async def test_pending_approval_defers_automatic_compaction(
         ] == ["function_call", "function_call_output"]
         assert await session.get_items() == [summary]
 
+        await run(agent, "second", session, streamed)
+        assert client.responses.compact.await_count == 2
+        assert await session.get_items() == [summary]
+
         await run(agent, "third", session, streamed)
         assert model.calls[3].input == [summary, {"role": "user", "content": "third"}]
     finally:
         if isinstance(backend, SQLiteSession):
             backend.close()
+
+
+@pytest.mark.parametrize("streamed", [False, True])
+@pytest.mark.parametrize("restored", [False, True])
+async def test_resumed_approval_compacts_for_live_and_restored_run_state(
+    streamed: bool, restored: bool
+) -> None:
+    """A RunState restored from JSON keeps compaction ownership like a live RunState."""
+    client = MagicMock()
+    summary = {"type": "compaction", "id": "cmp-test", "encrypted_content": "synthetic-summary"}
+    client.responses.compact = AsyncMock(return_value=SimpleNamespace(output=[summary]))
+    backend = SQLiteSession("approval-transport")
+    session = OpenAIResponsesCompactionSession(
+        "approval-transport",
+        backend,
+        client=client,
+        compaction_mode="input",
+        should_trigger_compaction=lambda _: True,
+    )
+    tool = get_function_tool(name="lookup", return_value=LOCAL_OUTPUT)
+    tool.needs_approval = True
+    call = get_function_tool_call("lookup")
+    model = ScriptedModel(steps=[[call], [get_text_message("resolved")]])
+    agent = Agent(name="worker", model=model, tools=[tool])
+    try:
+        interrupted = await run(agent, "first", session, streamed)
+        assert len(interrupted.interruptions) == 1
+        client.responses.compact.assert_not_awaited()
+
+        state = interrupted.to_state()
+        if restored:
+            state = await RunState.from_json(agent, state.to_json())
+        state.approve(interrupted.interruptions[0])
+        await run(agent, state, session, streamed)
+
+        client.responses.compact.assert_awaited_once()
+        assert [
+            item["type"]
+            for item in client.responses.compact.call_args.kwargs["input"]
+            if item.get("call_id") == call.call_id
+        ] == ["function_call", "function_call_output"]
+        assert await session.get_items() == [summary]
+    finally:
+        backend.close()
 
 
 @pytest.mark.parametrize("streamed", [False, True])
@@ -461,23 +506,19 @@ async def test_pending_hosted_mcp_approval_defers_automatic_compaction(
         else:
             state.reject(interrupted.interruptions[0])
         await run(agent, state, session, streamed)
-        for items in (model.calls[1].input, await session.get_items()):
+        # The deferred compaction settles with the resumed turn, as it does for a live RunState.
+        client.responses.compact.assert_awaited_once()
+        compact_input = client.responses.compact.call_args.kwargs["input"]
+        for items in (model.calls[1].input, compact_input):
             assert request.model_dump(exclude_unset=True) in items
             responses = [item for item in items if item.get("type") == "mcp_approval_response"]
             assert len(responses) == 1
             assert responses[0]["approval_request_id"] == request.id
             assert responses[0]["approve"] is approve
+        assert await session.get_items() == [summary]
 
         await run(agent, "second", session, streamed)
-        client.responses.compact.assert_awaited_once()
-        compact_input = client.responses.compact.call_args.kwargs["input"]
-        assert request.model_dump(exclude_unset=True) in compact_input
-        assert any(
-            item.get("type") == "mcp_approval_response"
-            and item.get("approval_request_id") == request.id
-            and item.get("approve") is approve
-            for item in compact_input
-        )
+        assert client.responses.compact.await_count == 2
         assert await session.get_items() == [summary]
 
         await run(agent, "third", session, streamed)
